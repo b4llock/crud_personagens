@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/personagem.dart';
 import '../services/auth_service.dart';
+import 'missoes_screen.dart';
 
 const _fundo = Color(0xFF14100C);
 const _pergaminho = Color(0xFF241B13);
@@ -20,6 +21,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  int _paginaSelecionada = 0;
   //chamada do serviço de autenticação
   final _auth = AuthService();
 
@@ -36,27 +38,55 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  Future<bool> _executar(Future<void> Function() acao) async {
+    try {
+      await acao();
+      return true;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Não foi possível concluir a ação: $e')),
+        );
+      }
+      return false;
+    }
+  }
+
   Future<void> _criarHeroi() async{
     final nome = _nomeController.text.trim();
     if (nome.isEmpty) return;
+    final vidaInicial = int.tryParse(_vidaController.text) ?? _vidaMax;
+    if (vidaInicial < 0 || vidaInicial > _vidaMax) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('A vida deve estar entre 0 e 100.')),
+      );
+      return;
+    }
 
     final heroi = Personagem(
       nome: nome,
-      vida: int.tryParse(_vidaController.text) ?? 100,
+      vida: vidaInicial,
       forca: int.tryParse(_forcaController.text) ?? 50,
     );
 
-    await _service.criarHeroi(heroi);
-    _nomeController.clear();
+    if (await _executar(() => _service.criarHeroi(heroi)) && mounted) {
+      _nomeController.clear();
+    }
   }
 
   Future<void> _atacar(Personagem p) async{
-    final novaVida = (p.vida! - 20).clamp(0, 9999);
-    await _service.tomarDano(p.id!, novaVida);
+    final novaVida = (p.vida - 20).clamp(0, _vidaMax).toInt();
+    await _executar(() => _service.tomarDano(p.id!, novaVida));
   }
 
-  Future<void> _curar(Personagem p) =>
-      _service.tomarDano(p.id!, (p.vida! + 20).clamp(0, _vidaMax));
+  Future<void> _curar(Personagem p) async {
+    await _executar(
+      () => _service.tomarDano(
+        p.id!,
+        (p.vida + 20).clamp(0, _vidaMax).toInt(),
+      ),
+    );
+  }
 
   // Escolhe o ícone do herói pela "classe" digitada no nome
   IconData _iconeDe(String nome) {
@@ -77,6 +107,24 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _paginaSelecionada,
+        onDestinationSelected: (index) {
+          setState(() => _paginaSelecionada = index);
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.shield_outlined),
+            selectedIcon: Icon(Icons.shield),
+            label: 'Personagens',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.task_alt_outlined),
+            selectedIcon: Icon(Icons.task_alt),
+            label: 'Missões',
+          ),
+        ],
+      ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -89,9 +137,12 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             children: [
               _cabecalho(),
-              _formulario(),
-              _tituloSecao('⚔  LISTA DE HERÓIS  ⚔'),
-              Expanded(child: _listaHerois()),
+              if (_paginaSelecionada == 0) ...[
+                _formulario(),
+                _tituloSecao('⚔  LISTA DE HERÓIS  ⚔'),
+                Expanded(child: _listaHerois()),
+              ] else
+                const Expanded(child: MissoesScreen()),
             ],
           ),
         ),
@@ -105,6 +156,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Stack(
         alignment: Alignment.center,
         children: [
+          const SizedBox(width: double.infinity),
           Column(
             children: [
               const Text(
@@ -279,8 +331,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _cardHeroi(Personagem p) {
-    final morto = p.vida! <= 0;
-    final pct = (p.vida! / _vidaMax).clamp(0.0, 1.0);
+    final morto = p.vida <= 0;
+    final pct = (p.vida / _vidaMax).clamp(0.0, 1.0).toDouble();
 
     // Verde -> amarelo -> vermelho conforme a vida
     final corVida = pct > 0.6
@@ -314,7 +366,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     border: Border.all(color: _ouro, width: 2),
                   ),
                   child: Icon(
-                    morto ? Icons.heart_broken : _iconeDe(p.nome!),
+                    morto ? Icons.heart_broken : _iconeDe(p.nome),
                     color: morto ? Colors.grey : _ouro,
                     size: 28,
                   ),
@@ -325,7 +377,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        p.nome!,
+                        p.nome,
                         style: const TextStyle(
                           color: _textoClaro,
                           fontSize: 18,
@@ -377,7 +429,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(9),
                         gradient: LinearGradient(
-                          colors: [corVida, corVida.withOpacity(0.6)],
+                          colors: [corVida, corVida.withValues(alpha: 0.6)],
                         ),
                       ),
                     ),
@@ -424,7 +476,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(width: 4),
                 IconButton(
                   tooltip: 'Matar personagem',
-                  onPressed: () => _service.deletarPersonagem(p.id!),
+                  onPressed: () => _executar(
+                    () => _service.deletarPersonagem(p.id!),
+                  ),
                   icon: const Icon(Icons.delete_forever,
                       color: Colors.redAccent),
                 ),
